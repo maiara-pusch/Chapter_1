@@ -1,0 +1,660 @@
+
+---
+title: "Analysis CTC - area 2"
+author: "Maiara Pusch"
+---
+
+
+The variables created throughout the code have been stored and can be loaded directly by the chunck below.
+```{r}
+#load("RData/analise.CTC.ipiranga.RData")
+```
+
+installation of packages
+```{r}
+#install.packages("pacman")
+pacman::p_load(georob, dplyr, tidyverse,pedometrics,raster,gstat,googlesheets,mapview,corrr,sf,robustbase,reshape,MASS,ggplot2,colormap,rgdal,caret,car)
+```
+
+Reading soil data
+```{r}
+dados = read.csv("../Data/Soil/data_CTC.csv")
+dados=na.omit(dados)
+names(dados)
+```
+
+Before the analyses, the variables that would be used were selected from the data set, being:
+```{r}
+dados= dados %>% dplyr::select(x, y, CTC)
+```  
+
+
+When working with the integer values of the coordinates, the model displays errors in converting the values. In this way, subtract scans from the coordinates of their respective minimum values.
+
+```{r}
+dados$coordx= dados$x - min(dados$x)
+dados$coordy= dados$y - min(dados$y)
+```
+
+Viewing points and area
+```{r}
+poly= shapefile("../Data/Boundary/22S.shp")
+coordinates(dados)= ~x+y
+crs(dados)= crs(poly)
+#spplot(dat, zcol="CTC") 
+mapview(poly, alpha.regions = 0.01, color = "red", map.types = c("Esri.WorldImagery")) + mapview(dados, zcol="CTC", legend=T)
+```
+
+```{r}
+par(mfcol=c(2,2))
+boxplot(dados$CTC, horizontal=TRUE, outline=TRUE)
+hist(dados$CTC, col= "gray", xlab="CTC", main=" CTC")
+#hist(log(dados$CTC), col= "gray", xlab="Potássio", main="log(CTC)")
+#qqnorm(dados$CTC)
+```
+
+ Reading the covariable in raster and visualization 
+```{r}
+variaveis_auxiliares = list.files(path = "../Data/Covariates/", pattern = ".tif$", full.names = T)
+# Convert list to stack
+variaveis_auxiliares <- raster::stack(variaveis_auxiliares)
+plot(variaveis_auxiliares, maxnl=20, nc=5)
+```
+
+Extraction of auxiliary information co-located with soil sampling points
+```{r}
+# extrair da lista de acordo com os pontos de solo
+dat = raster::extract(variaveis_auxiliares, dados)
+dados = cbind(dados, dat)
+```
+
+Soil types were grouped according to the third classification (Santos et al., 2013), thus grouping into 3 classes: 1.2 and 3- it´s only showed the classes
+```{r}
+tiposdesolo= shapefile("../Data/Types_of_soil/tipos_solo_22_S.shp")
+
+mapview(tiposdesolo) 
+```
+
+In parentheses are the numbers corresponding to the soil classes.
+
+*LVAe2.1(**6**), LVe1.1(**2**) e LVef1.1(**1**) received the number 10.
+
+* PVAa3.1(**7**), LVAd3.1(**8**), LVAd2.1(**3**), LVAa3.1(**5**) received the number 20.
+
+* RQoa4.1(**4**) e RQod4.1(**9**) received the number 30.
+```{r}
+dados$TPS[dados$TPS=="1"]=10
+dados$TPS[dados$TPS=="2"]=10
+dados$TPS[dados$TPS== "6"]=10
+dados$TPS[dados$TPS== "7"]=20
+dados$TPS[dados$TPS== "8"]=20
+dados$TPS[dados$TPS== "3"]=20
+dados$TPS[dados$TPS== "5"]=20
+dados$TPS[dados$TPS=="4"]=30
+dados$TPS[dados$TPS=="9"]=30
+dados$TPS= as.factor(dados$TPS)
+dados$talhoes= as.factor(dados$talhoes)
+dados=na.omit(dados)
+str(dados)
+```
+
+
+ Check the relationship of soil types with CTC
+```{r}
+np= plyr::count(dados$TPS)
+
+ggplot(as.data.frame(dados), aes(TPS, CTC)) +
+   ylab("CTC (mmolc dm-3)")+
+  xlab("TPS")+
+  geom_boxplot(outlier.colour = "red") + 
+  annotate("text",x=np$x, y=120, label = np$freq, colour= "red", size=4.5)+
+theme_bw(base_size = 15)
+``` 
+
+Check the relationship of the butchers with the  CTC
+```{r}
+np= plyr::count(dados$talhoes)
+
+ggplot(as.data.frame(dados), aes(talhoes, CTC)) +
+  ylab("CTC (mmolc dm-3)")+
+  xlab("Fields")+
+  geom_boxplot(outlier.colour = "red") + 
+  annotate("text",x=np$x, y=120, label = np$freq, colour= "red", size=4.5)+
+theme_bw(base_size = 15)
+``` 
+
+correlation between variables
+```{r}
+cor= dados %>%
+  as.data.frame() %>%
+  dplyr::select(- TPS, - talhoes, - coordx, - coordy)%>%
+  correlate(method = "spearman", diagonal = 1, use = "pairwise.complete.obs")%>%
+  mutate_if(is.numeric, round, 3) %>% 
+   as.data.frame()
+cor
+```
+ 
+Variables that had correlations greater than **0.9** were selected  
+```{r}
+cor_above = cor %>%  
+  gather(-term, key = "colname", value = "cor") %>% 
+  filter(abs(cor) < 1 & abs(cor) >= 0.9) %>% 
+  dplyr::select(term, colname, cor) %>% 
+  distinct(cor, term,colname) %>% 
+  arrange(cor) 
+cor_above
+```  
+
+```{r}
+names_above = cor_above$term
+names_above
+selected_var = cor %>% 
+  dplyr::select(CTC, term) %>% 
+  filter(term %in% names_above) %>% 
+  arrange(CTC)
+selected_var
+```
+
+```{r}
+reg.cov <- lm(CTC ~ ., data = dplyr::select(as.data.frame(dados), -b3,-b4,-b5, -catch_area, -sw1, -sw2, - CH_0.5m, - coordx, -coordy))
+
+reg.cov.vif <- pedometrics::stepVIF(reg.cov, threshold = 10)
+```
+
+```{r}
+summary(reg.cov.vif)
+```
+
+visualization of the behavior of multiple regression residuals as a function of the variables without colinearitye
+
+```{r}
+par(mfrow=c(2,2))
+plot(reg.cov.vif, which=c(1:6))
+hist(reg.cov.vif$residuals)
+boxplot(reg.cov.vif$residuals, horizontal = T)
+# dw= dwtest(CTC ~ CH_1 + slope + SPI + talhoes + TWI + y, data = as.data.frame(dados))
+# dw
+```
+
+Selection of auxiliary variables by AKAIKE criterion (AIC)
+```{r}
+reg.aic= MASS::stepAIC(reg.cov.vif)
+```
+
+```{r}
+summary(reg.aic)
+```
+
+### Adjustment of the multivariate model according to auxiliary variables 
+```{r}
+min(dist(dados@coords))
+```
+
+```{r}
+plot(ku.sv <-sample.variogram(residuals(reg.aic),locations = dados@coords, lag.dist.def= seq(0,1200, by=100), estimador="qn"), type="p", annotate=T, main="Resíduos da regressão");grid()
+```
+
+
+```{r}
+ku= georob::georob(CTC ~ CH_1 + slope + SPI + talhoes + TWI + coordy, data = dados,  locations = ~ x + y,variogram.model = "RMmatern", param=c(variance=200, nugget=110, scale= 350, nu=1.5), fit.param = default.fit.param(variance=T, nugget = T, scale=T, nu=F), psi.func = c("huber"))
+
+ku.sph= georob::georob(CTC ~ CH_1 + slope + SPI + talhoes + TWI + coordy, data = dados,  locations = ~ x + y,variogram.model = "RMspheric", param=c(variance=200, nugget=110, scale= 350), fit.param = default.fit.param(variance=T, nugget = T, scale=T), psi.func = c("huber"))
+
+ku.exp= georob::georob(CTC ~ CH_1 + slope + SPI + talhoes + TWI + coordy, data = dados,  locations = ~ x + y,variogram.model = "RMexp", param=c(variance=200, nugget=110, scale= 350), fit.param = default.fit.param(variance=T, nugget = T, scale=T), psi.func = c("huber"))
+```
+
+```{r}
+summary(ku)
+```
+
+Does not converge 
+```{r}
+#summary(ku.sph)
+```
+
+Does not converge 
+```{r}
+#summary(ku.exp)
+```
+
+```{r }
+# prfl.ku <- profilelogLik(ku ,values=data.frame(scale=seq(100, 800, by=25)))
+# plot(loglik~scale, prfl.ku, type="l", main="ku")
+```
+
+Cross-validation (LOOCV)
+```{r}
+cv.ku = georob::cv(ku, seed= 42, nset = 95, ncores=6)
+#cv.ku.exp =georob::cv(ku.exp, seed= 42, nset =95, ncores=6)
+```
+
+```{r}
+cv.ku
+```
+
+```{r}
+plot(cv.ku, main="Matern")
+#plot(cv.ku.exp, main="Exponential")
+#plot(cv.ku.sph, main="Spheric")
+```
+
+```{r}
+plot(ku, lag.dist.def=seq(0,1000, by=100), max.lag=1100, estimator="qn", xlab ="Distance", ylab = "Semivariance", main="ku", type="p",annotate=T)
+#lines(ku.sph, col="red")
+#lines(ku.exp, col="blue")
+```
+
+### Adjustment of the multivariate model according to coordinates 
+```{r}
+reg.xy= lm(CTC ~ coordx + coordy, dados)
+plot(ku.sv <-sample.variogram(residuals(reg.xy),locations = dados@coords, lag.dist.def= seq(0,600, by=60), estimador="qn"), type="p", annotate=T)
+```
+
+```{r}
+ku.xy = georob::georob(CTC ~ coordx + coordy, data = dados,  locations = ~ x + y, variogram.model = "RMmatern", param=c(variance=300, nugget=100, scale= 400, nu=0.5), fit.param = default.fit.param(variance=T, nugget = T, scale=T, nu=F), psi.func = c("huber"), verbose=1)
+
+ku.xy.sph = georob::georob(CTC ~ coordx + coordy, data = dados,  locations = ~ x + y, variogram.model = "RMspheric", param=c(variance=300, nugget=100, scale= 400), fit.param = default.fit.param(variance=T, nugget = T, scale=T),psi.func = c("huber"), verbose=1)
+
+ku.xy.exp = georob::georob(CTC ~ coordx + coordy, data = dados,  locations = ~ x + y, variogram.model = "RMexp", param=c(variance=300, nugget=100, scale= 400), fit.param = default.fit.param(variance=T, nugget = T, scale=T),psi.func = c("huber"), verbose=1)
+```
+
+```{r}
+summary(ku.xy)
+```
+```{r}
+summary(ku.xy.sph)
+```
+```{r}
+summary(ku.xy.exp)
+```
+
+Cross-validation 
+```{r}
+cv.xy = georob::cv(ku.xy, seed= 42, nset =95, ncores=6,  control=control.georob(initial.param=FALSE))
+cv.xy.sph = georob::cv(ku.xy.sph, seed= 42, nset =95, ncores=6,control=control.georob(initial.param=FALSE))
+cv.xy.exp = georob::cv(ku.xy.exp, seed= 42, nset =95, ncores=6,control=control.georob(initial.param=FALSE))
+```
+
+```{r}
+cv.xy;cv.xy.sph;cv.xy.exp
+```
+
+
+```{r}
+# plot(cv.xy, main="Matern")
+# plot(cv.xy.sph, main="Spheric")
+# plot(cv.xy.exp, main="Exponential")
+```
+
+```{r}
+print(plot(ku.xy, lag.dist.def= seq(0,800, by=100), max.lag=2000, estimator="qn", xlab ="Distance", ylab = "Semivariance", type="p",annotate=T, main="ku ~xy"))
+#lines(ku.xy.exp, col="red")
+#lines(ku.xy.sph, col="blue")
+```
+
+### Univariate model adjustment
+
+```{r} 
+reg.kri= lm(CTC ~1, dados)
+plot(kri.sv <-sample.variogram(residuals(reg.kri),locations = dados@coords, lag.dist.def= seq(0,800, by=100), estimador="qn"), type="p", annotate=T)
+```
+
+```{r}
+kri=  georob::georob(CTC ~ 1, data = dados,  locations = ~ x + y,variogram.model = "RMmatern",param=c(variance=300, nugget=100, scale= 450, nu= 1.5), fit.param = default.fit.param(variance=T, nugget = T, scale=T, nu=F),psi.func = c("huber"))
+
+kri.sph=  georob::georob(CTC ~ 1, data = dados,  locations = ~ x + y,variogram.model = "RMsph",param=c(variance=300, nugget=100, scale= 450), fit.param = default.fit.param(variance=T, nugget = T, scale=T),psi.func = c("huber"))
+
+kri.exp=  georob::georob(CTC ~ 1, data = dados,  locations = ~ x + y,variogram.model = "RMexp",param=c(variance=300, nugget=100, scale= 450), fit.param = default.fit.param(variance=T, nugget = T, scale=T),psi.func = c("huber"))
+```
+
+```{r}
+summary(kri)
+```
+
+```{r}
+summary(kri.sph)
+```
+
+does not converge  
+```{r}
+summary(kri.exp)
+```
+
+```{r}
+print(plot(kri, lag.dist.def=seq(0,600, by=100), max.lag=1100, estimator="qn", xlab ="Distance", ylab = "Semivariance", type="p",annotate=T, main="kriging"))
+lines(kri.sph, col="red")
+#lines(kri.exp, col = "blue")
+```
+
+Cross-validation (LOOCV)
+```{r}
+cv.kri = georob::cv(kri, seed= 42, nset =95, ncores=6,control=control.georob(initial.param=FALSE))
+cv.kri.sph = georob::cv(kri.sph, seed= 42, nset =95, ncores=6,control=control.georob(initial.param=FALSE))
+#cv.kri.exp = georob::cv(kri.exp, seed= 42, nset =95, ncores=6,control=control.georob(initial.param=FALSE))
+```
+
+```{r}
+cv.kri;cv.kri.sph
+```
+
+```{r}
+# plot(cv.kri, main="Matern")
+# plot(cv.kri.sph, main="Spheric")
+# plot(cv.kri.exp, main="Exponential")
+```
+
+
+Visualization of semivariogram all models
+```{r}
+print(plot(kri, lag.dist.def=seq(0,600, by=100), estimator="qn", xlab ="Distance", ylab = "Semivariance", type="p",cex.lab=1.5, cex.axis=1.5));grid()
+print(plot(ku.xy, lag.dist.def=seq(0,00, by=100), estimator="qn", xlab ="Distance", ylab = "Semivariance", type="p",add=T, col="blue", cex.lab=1.5, cex.axis=1.5))
+print(plot(ku, lag.dist.def=seq(0,600, by=100),  estimator="qn", xlab ="Distance", ylab = "Semivariance", type="p",add=T, col="red", cex.lab=1.5, cex.axis=1.5))
+title("CTC (mmolc dm-3) - Area 2")
+legend("bottomright", lt=1, col=c("black", "blue", "magenta"), legend = c("Robust Ordinary Kriging", "Robust Universal Kriging ~ x + y", "Robust Universal Kriging ~ cov"))
+```
+
+Cross-validation (LOOCV) deterministic model IDW 
+```{r}
+cv.idw=gstat::krige.cv(CTC ~ 1, dados, nfold = 96)# validação cruzada
+cv.idw=as.data.frame(cv.idw)# transforma para data.frame
+statistics.idw <- c(
+        me = mean(cv.idw$observed - cv.idw$var1.pred),
+        medme = median(cv.idw$observed - cv.idw$var1.pred),
+        mae = mean(abs(cv.idw$observed - cv.idw$var1.pred)),
+        rmse = sqrt( mean((cv.idw$observed - cv.idw$var1.pred )^2 ) ),
+        nse2 =1- sum((cv.idw$observed - cv.idw$var1.pred)^2)/ sum((cv.idw$observed- mean(cv.idw$observed))^2),
+        nse1 =1- sum(abs(cv.idw$observed - cv.idw$var1.pred))/ sum(abs(cv.idw$observed- mean(cv.idw$observed))))
+```
+
+```{r}
+# plot(cv.idw$observed ~cv.idw$var1.pred)
+# lmidw=lm(cv.idw$observed ~cv.idw$var1.pred)
+# abline(lmidw)
+```
+
+Cross-validation (LOOCV) for the regression model according to auxiliary variables
+
+* The dat variable was added, only the information used in cross-validation, in order to facilitate calculations.
+* A data frame was created that would store the metrics
+* The average of the metrics of each fold was performed
+
+```{r}
+dat = dplyr::select(as.data.frame(dados), 
+   -b3, -b4, -b5, -catch_area, -sw1, -sw2, -CH_0.5m, -coordx)
+```
+
+
+```{r}
+model= MASS::rlm(CTC ~ CH_1 + slope + SPI + talhoes + 
+    TWI + coordy, data=dat, psi = psi.huber, k2= 2, escale.est= "Huber")
+
+#data <- model.frame(model)
+idx  <- seq(1, nrow(dat), 1)
+#data <- cbind(data, idx)
+obs  <- numeric()
+pred <- numeric()
+pev  <- numeric()
+    # run cross-validation
+for (i in 1:nrow(dat)) {
+      cv.fit     <- MASS::rlm(formula(model), subset = idx[-i], data = dat, psi = psi.huber, k=2, escale.est= "Huber")
+      cv.pred    <- predict(cv.fit, dat[i, ], se.fit = TRUE, interval =c("prediction"), type= c("response"))
+      obs[i]     <- dat[i, 1]
+      pred[i]    <- cv.pred$fit
+  
+      # standard deviation of the predicted mean value of Y
+      # sd.mean[i] <- cv.pred$se.fit
+      # standard deviation of a predicted values of an individual observation
+      # also known as prediction error variance
+      pev[i] <- (sqrt(1 + c(cv.pred$se.fit/cv.pred$residual.scale) ^ 2) *
+                   cv.pred$residual.scale) ^ 2
+}
+
+pev2= (cv.pred$se.fit^2) + (cv.pred$residual.scale^2)
+
+statistics.predict <- c(
+        me = mean(obs - pred),
+        
+        medme = median(obs - pred), 
+        
+        mae = mean(abs(obs - pred)),
+        
+        rmse = sqrt(mean((obs - pred)^2)),
+        
+        nse2 =1-sum((obs - pred)^2)/
+        sum((obs - mean(obs))^2),
+
+        nse1 =1-(sum(abs(obs - pred))/
+        sum(abs(obs - mean(obs)))),
+        # Compara as diferenças do erro ao quadrado pela variação dos erros de predição    
+        msdr =mean((obs - pred)^2/pev),
+        
+        medsse =median((obs - pred)^2/pev))
+
+msdr2 =mean((obs - pred)^2/pev2)
+statistics.predict
+```
+
+```{r}
+# par(mfcol=c(2,2))
+# boxplot(cv.fit$residuals, horizontal= T)
+# hist(cv.fit$residuals, col="gray")
+```
+
+```{r}
+#r2= hydroGOF::br2(cv.xy.exp$pred$pred,cv.xy.exp$pred$data)
+```
+
+
+```{r}
+statistics.kri <- c(
+        me = mean(cv.kri.sph$pred$data - cv.kri.sph$pred$pred),
+        medme = median(cv.kri.sph$pred$data - cv.kri.sph$pred$pred),
+        mae = mean(abs(cv.kri.sph$pred$data - cv.kri.sph$pred$pred)),
+        rmse = sqrt(mean((cv.kri.sph$pred$data - cv.kri.sph$pred$pred)^2)),
+        nse2=1-sum((cv.kri.sph$pred$data - cv.kri.sph$pred$pred)^2)/
+        sum((cv.kri.sph$pred$data- mean(cv.kri.sph$pred$data))^2),
+        nse1=1-sum(abs(cv.kri.sph$pred$data - cv.kri.sph$pred$pred))/
+        sum(abs(cv.kri.sph$pred$data- mean(cv.kri.sph$pred$data))),
+        msse= mean(((cv.kri.sph$pred$data - cv.kri.sph$pred$pred)/cv.kri.sph$pred$se)^2))
+```
+
+
+```{r}
+statistics.xy <- c(
+        me = mean(cv.xy.sph$pred$data - cv.xy.sph$pred$pred),
+        medme = median(cv.xy.sph$pred$data - cv.xy.sph$pred$pred),
+        mae = mean(abs(cv.xy.sph$pred$data - cv.xy.sph$pred$pred)),
+        rmse = sqrt( mean((cv.xy.sph$pred$data - cv.xy.sph$pred$pred)^2)),
+        nse2=1-sum((cv.xy.sph$pred$data - cv.xy.sph$pred$pred)^2)/
+        sum((cv.xy.sph$pred$data- mean(cv.xy.sph$pred$data))^2),
+        nse1=1-sum(abs(cv.xy.sph$pred$data - cv.xy.sph$pred$pred))/
+        sum(abs(cv.xy.sph$pred$data- mean(cv.xy.sph$pred$data))),
+        msse= mean(((cv.xy.sph$pred$data - cv.xy.sph$pred$pred)/cv.xy.sph$pred$se)^2))
+```
+
+```{r}
+statistics.ku <- c(
+        me = mean(cv.ku$pred$data - cv.ku$pred$pred),
+        medme = median(cv.ku$pred$data - cv.ku$pred$pred),
+        mae = mean(abs(cv.ku$pred$data - cv.ku$pred$pred)),
+        rmse = sqrt(mean((cv.ku$pred$data - cv.ku$pred$pred)^2)),
+        nse2=1-sum((cv.ku$pred$data - cv.ku$pred$pred)^2)/
+        sum((cv.ku$pred$data- mean(cv.ku$pred$data))^2),
+        nse1=1-sum(abs(cv.ku$pred$data - cv.ku$pred$pred))/
+        sum(abs(cv.ku$pred$data- mean(cv.ku$pred$data))),
+        msse= mean(((cv.ku$pred$data - cv.ku$pred$pred)/cv.ku$pred$se)^2))
+```
+
+```{r}
+print(plot(kri, lag.dist.def=seq(0,600, by=100), max.lag=1100, estimator="qn", xlab ="Distance", ylab = "Semivariance", type="p", cex.lab=1.2, cex.axis=1.2))
+print(plot(ku.xy, lag.dist.def=seq(0,600, by=100), max.lag=1100, estimator="qn", xlab ="Distance", ylab = "Semivariance", type="p" ,add=T, col="blue", cex.lab=1.2, cex.axis=1.2))
+print(plot(ku, lag.dist.def=seq(0,600, by=100), max.lag=1100, estimator="qn", xlab ="Distance", ylab = "Semivariance", type="p",add=T, col="red", cex.lab=1.2, cex.axis=1.2))
+legend("bottomright", lt=1, col=c("black", "blue", "red"), legend = c("Robust Ordinary Kriging", "Robust Universal Kriging ~ x + y", "Robust Universal Kriging ~ cov"), cex=1.2)
+```
+
+```{r}
+me= rbind(statistics.kri, statistics.xy, statistics.ku)
+statistics.idw;me;statistics.predict; 
+me
+```
+
+```{r}
+cv.kri;cv.xy;cv.ku
+```
+
+Extracting auxiliary information values for the entire interpolation grid node
+```{r}
+# rasterizo o contorno para  a resolução do mapa interpolado
+boundary <-raster::shapefile("../Data/Boundary/22S.shp")
+r =raster::raster(boundary, res = 10) # rerolu??o do pixel 
+rp =raster::rasterize(boundary, r, 0) # cria um objeto no formato raster
+grid = as(rp, "SpatialPixelsDataFrame") # transforma em pontos onde ser?o realizadas as interpola??es
+pontos_grid= raster::extract(variaveis_auxiliares, grid)
+# Combino os extraidos
+grid_interpolacao = cbind(grid,pontos_grid)
+grid_interpolacao = na.omit(grid_interpolacao)
+```
+
+Creation of the prediction grid
+```{r}
+grid_interpolacao$coordx= grid_interpolacao$x- min(grid_interpolacao$x)
+grid_interpolacao$coordy= grid_interpolacao$y- min(grid_interpolacao$y)
+grid_interpolacao$talhoes = as.factor(grid_interpolacao$talhoes)
+```
+
+
+prediction by KU according to auxiliary variables and visualization of the prediction map 
+```{r}
+map.ku.cov <- predict(ku, newdata= grid_interpolacao, control=control.predict.georob(extended.output=TRUE))
+sp::gridded(map.ku.cov)= TRUE
+sp::spplot(map.ku.cov, c("pred"), main="Robust Universal Kriging prediction", scales=list(draw=TRUE))
+```
+
+```{r}
+round(cbind(dados@coords,rweights=ku[["rweights"]])[c(14,62,86),],2)
+sel <- ku[["rweights"]] <= 0.8 & !1:nrow(dados) %in% c(14,62,86)
+round(cbind(dados@coords,rweights=ku[["rweights"]])[sel,],2)
+plot(poly)
+points(y~x, dados, subset=c(45,92,96,14,62,86), pch=4); grid()
+```
+
+prediction by KU according to the coordinates and visualization of the prediction map
+```{r }
+map.ku.xy <- predict(ku.xy.sph, newdata= grid_interpolacao, control=control.predict.georob(extended.output=TRUE))
+sp::gridded(map.ku.xy)= TRUE
+sp::spplot(map.ku.xy, c("pred"), main="Robust Universal Kriging prediction", scales=list(draw=TRUE)) 
+```
+
+Prediction by OK and visualization of the prediction map 
+
+```{r}
+map.kri <- predict(kri.sph, newdata= grid_interpolacao, control=control.predict.georob(extended.output=TRUE))
+sp::gridded(map.kri)= TRUE
+sp::spplot(map.kri, c("pred"), main="Robust Ordinary Kriging prediction", scales=list(draw=TRUE))
+```
+
+Deterministic model prediction and prediction map visualization
+```{r}
+proj4string(dados)= CRS(proj4string(grid_interpolacao))
+map.idw= gstat::idw(CTC ~ 1, dados, grid_interpolacao)
+sp::spplot(map.idw, c("var1.pred"),main="IDW prediction", scales=list(draw=TRUE))
+```
+
+
+Prediction of the regression model and prediction map visualization
+```{r}
+grid.reg = as.data.frame(grid_interpolacao)
+#grid.reg= na.omit(grid.reg)
+map.reg =  predict(model, newdata= grid.reg, type = c("response"), se.fit=T)
+map.reg = as.data.frame(map.reg)
+map.reg$x = grid.reg$x
+map.reg$y = grid.reg$y
+map.reg
+map.reg=dplyr::select(map.reg, x, y,fit, se.fit)
+map.reg=rasterFromXYZ(map.reg)
+sp::spplot(map.reg, c("fit"))
+sp::spplot(map.reg, c("se.fit"))
+```
+
+
+
+Selects the predicted values of each method. Then we group in a data frame so that I calculate the densities, it is necessary that the memos are grouped into a single column, for this we use the melt function.
+
+```{r}
+ROK= (cv.kri$pred$pred)
+RUK_coord= (cv.xy$pred$pred)
+RUK_covars= na.omit(cv.ku$pred$pred)
+IDW= (cv.idw$var1.pred)
+RMLR= (pred)
+OBS= dados$CTC
+min(obs)
+#df=cbind(kri.pred, obs,xy.pred)
+df= cbind(IDW, RMLR, ROK, RUK_coord, RUK_covars, OBS)
+df = as.data.frame(df)
+df1=reshape::melt(df, variable.series = "Metodos")
+df1 = dplyr::rename(df1, Methods= variable)
+#write.csv(df1, "../dados/df1.ctc_ipiranga.csv")
+```
+
+Compare the similarity between two distributions by means of the kolmorogov-smirnov test
+```{r}
+# Kolmorogv-smirnov
+obs.kri= ks.test(OBS, KRI)
+#obs.kri1= kl.dist(OBS, KRI)
+obs.ku= ks.test(OBS, KU)
+#obs.ku1= kl.dist(OBS, KU)
+obs.ku_xy= ks.test(OBS, KU_XY)
+#obs.ku_xy1= kl.dist(OBS, KU_XY)
+obs.idw= ks.test(OBS, IDW)
+#obs.idw1= kl.dist(OBS, IDW)
+obs.reg= ks.test(OBS, REG)
+#obs.reg1= kl.dist(OBS, REG)
+
+
+IDW.ks= obs.idw$statistic
+KRI.ks = obs.kri$statistic
+KU_XY.ks = obs.ku_xy$statistic
+KU.ks = obs.ku$statistic
+REG.ks = obs.reg$statistic
+ks= cbind(IDW.ks,REG.ks, KRI.ks, KU_XY.ks, KU.ks)
+ks= as.data.frame(ks)
+ks= dplyr::rename(ks, IDW=IDW.ks, REG= REG.ks, KRI=KRI.ks, KU_XY=KU_XY.ks, KU= KU.ks)
+t(ks)
+```
+
+Density of predicted values in cross-validation
+
+```{r}
+ggplot(df1, aes(x= value, y= Methods, fill= Methods) )+
+  ggridges::geom_density_ridges(scale=3, alpha=1, show.legend = F)+
+  labs(title = "CTC (mmolc dm-3) - Area 2") +
+  scale_fill_manual(values=c("#440154FF", "#414487FF", "#2A788EFF", "#22A884FF", "#7AD151FF", "#FDE725FF"))+
+    theme_bw(base_size=20)+
+   theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+Saving the workspace
+```{r, eval=FALSE, include=FALSE}
+save.image("RData/analise.CTC.ipiranga.RData")
+```
+
+```{r}
+# par(mfcol=c(2,2))
+# boxplot(dados$CTC,horizontal=TRUE, outline=TRUE)
+# hist(dados$CTC, col="gray", xlab="CTC", main= "")
+# par(mfcol=c(2,2))
+# boxplot(ku$residuals,horizontal=TRUE, outline=TRUE)
+# hist(ku$residuals, col="gray", xlab="Residuals RUK ~COV", main= "")
+# par(mfcol=c(2,2))
+# boxplot(ku.xy.sph$residuals,horizontal=TRUE, outline=TRUE)
+# hist(ku.xy.sph$residuals, col="gray", xlab="Residuals RUK ~XY", main= "")
+# par(mfcol=c(2,2))
+# boxplot(kri.sph$residuals,horizontal=TRUE, outline=TRUE)
+# hist(kri.sph$residuals, col="gray", xlab="Residuals ROK", main= "")
+# par(mfcol=c(2,2))
+# boxplot(cv.fit$residuals,horizontal=TRUE, outline=TRUE)
+# hist(cv.fit$residuals, col="gray", xlab="Residuals RMLR", main= "")
+```
+
+The maps was save and ploted on QGis

@@ -8,6 +8,7 @@ author: "Maiara Pusch"
 The variables created throughout the code have been stored and can be loaded directly by the chunck below.
 ```{r}
 #load("RData/analise.K.ipiranga.RData")
+load("RData/potassio.RData")
 ```
 
 installation of packages
@@ -18,15 +19,17 @@ pacman::p_load(georob, dplyr, tidyverse,pedometrics,raster,gstat,googlesheets,ma
       
 Reading soil data
 ```{r}
-dados = read.csv("../Data/Soil/data_K.csv")
+dados = read.csv("../Data/Soil/soil_ipiranga_grade.csv")
 dados=na.omit(dados)
 names(dados)
 ```
-
+```{r}
+psych::describe(dplyr::select(dados,K))
+```
 Before the analyses, the variables that would be used were selected from the data set, being:
 ```{r}
-dados= dados %>% dplyr::select( x, y, K)
-```  
+dados= dados %>% dplyr::select(-X, -Sandy, -Silt, -Clay, -MO,-P,-CTC,-BS,-TPSF,-optional)
+```   
 
 When working with the integer values of the coordinates, the model displays errors in converting the values. In this way, subtract scans from the coordinates of their respective minimum values.
 ```{r}
@@ -45,35 +48,34 @@ mapview(poly, alpha.regions = 0.01, color = "red", map.types = c("Esri.WorldImag
 
 ```{r}
 par(mfcol=c(2,2))
-boxplot(dados$K, horizontal=TRUE, outline=TRUE)
+boxplot(dados$K, horizontal=TRUE, outline=TRUE, col="white")
 hist(dados$K, col= "gray", xlab="Potássio", main=" K")
 #hist(log(dados$K), col= "gray", xlab="Potássio", main="log(K)")
 #qqnorm(dados$K)
 ```
 
- Reading the covariable in raster and visualization 
-```{r,fig.align='center', fig.cap="Fig 3. Variáveis auxiliares utilizadas"}
-variaveis_auxiliares = list.files(path = "../Data/Covariates/", pattern = ".tif$", full.names = T)
-# Convert list to stack
-variaveis_auxiliares <- raster::stack(variaveis_auxiliares)
-par(mfrow=c(2,2))
-plot(variaveis_auxiliares, maxnl=20, nc=5)
-```
+<!--  Reading the covariable in raster and visualization  -->
+<!-- ```{r,fig.align='center', fig.cap="Fig 3. Variáveis auxiliares utilizadas"} -->
+<!-- variaveis_auxiliares = list.files(path = "../Data/Covariates/", pattern = ".tif$", full.names = T) -->
+<!-- # Convert list to stack -->
+<!-- variaveis_auxiliares <- raster::stack(variaveis_auxiliares) -->
+<!-- par(mfrow=c(2,2)) -->
+<!-- plot(variaveis_auxiliares, maxnl=20, nc=5) -->
+<!-- ``` -->
 
-Extraction of auxiliary information co-located with soil sampling points
-```{r}
-# extrair da lista de variaveis auxiliares de acordo com os pontos de solo
-dat = raster::extract(variaveis_auxiliares, dados)
-dados = cbind(dados, dat)
-dados
-```
+<!-- Extraction of auxiliary information co-located with soil sampling points -->
+<!-- ```{r} -->
+<!-- # extrair da lista de variaveis auxiliares de acordo com os pontos de solo -->
+<!-- dados = cbind(dados, raster::extract(variaveis_auxiliares, dados)) -->
+<!-- dados -->
+<!-- ``` -->
 
-Soil types were grouped according to the third classification (Santos et al., 2013- citado no artigo), thus grouping into 3 classes: 1.2 and 3
-```{r}
-tiposdesolo= shapefile("../Data/Types_of_soil/tipos_solo_22_S.shp")
-par(mfrow=c(2,2))
-mapview(tiposdesolo) 
-```
+<!-- Soil types were grouped according to the third classification (Santos et al., 2013- citado no artigo), thus grouping into 3 classes: 1.2 and 3 -->
+<!-- ```{r} -->
+<!-- tiposdesolo= shapefile("../Data/Types_of_soil/tipos_solo_22_S.shp") -->
+<!-- par(mfrow=c(2,2)) -->
+<!-- mapview(tiposdesolo)  -->
+<!-- ``` -->
 
 In parentheses are the numbers corresponding to the soil classes.
 
@@ -165,40 +167,94 @@ reg.cov.vif <- pedometrics::stepVIF(reg.cov, threshold = 10)
 summary(reg.cov.vif)
 ```
 
-visualization of the behavior of multiple regression residuals as a function of the variables without colinearitye
 
-```{r}
-par(mfrow=c(2,2))
-plot(reg.cov.vif, which=c(1:6))
-hist(reg.cov.vif$residuals)
-boxplot(reg.cov.vif$residuals, horizontal = T)
-```
 
 Selection of auxiliary variables by AKAIKE criterion (AIC)
 ```{r}
 reg.aic= MASS::stepAIC(reg.cov.vif)
+summary(reg.aic)
+```
+
+visualization of the behavior of multiple regression residuals as a function of the variables without colinearitye
+
+```{r}
+par(mfrow=c(2,2))
+plot(reg.aic, which=c(1:6))
+hist(reg.aic$residuals)
+boxplot(reg.aic$residuals, horizontal = T)
+```
+
+```{r}
+reg.aic$residuals
+dados$residuo.aic= reg.aic$residuals
+plot(gstat::variogram(residuo.aic ~1, data=dados, cutoff= 800, width=80, map=T), main=" residuals (K- Area 2)")
 ```
 ```{r}
-summary(reg.aic)
+max_dist = ceiling(max(dist(dados@coords)))
+min_dist = ceiling(min(dist(dados@coords)))
+plot(georob::sample.variogram(residuo.aic ~1, locations = ~x+y, data=dados, lag.dist.def= seq(0,max_dist/2, by= min_dist*1.4), xy.angle.def= c(0., 22.5, 67.5, 112.5, 157.5, 180.)), type="l", col=1:4, annotate=T);grid()
 ```
 
 
 ### Adjustment of the multivariate model according to auxiliary variables 
 
 ```{r}
-plot(ku.sv <-sample.variogram(residuals(reg.aic),locations = dados@coords, lag.dist.def= seq(0,800, by=100), estimador="qn"), type="p", annotate=T, main="Resíduos da regressão")
+plot(ku.sv <-sample.variogram(residuals(reg.aic),locations = dados@coords, lag.dist.def= seq(0,800, by=100), estimador="qn"), type="l", annotate=T, main="Resíduos da regressão")
+```
+
+
+Em busca do melhor parâmetro de suavidade
+```{r}
+#d= max(dist(dados@coords))/2
+
+parametro =data.frame(v =  c(seq(0.2, 1, by=0.1),seq(1.5,4, by=0.5),6,8),
+                      EM= NA,
+                      MAE= NA,
+                      RMSE = NA,
+                      variance = NA,
+                      nugget = NA,
+                      scale=NA)
+models= list()
+
+for(i in 1:nrow(parametro)){
+ku= georob::georob(K ~ CH_1 + elevacao + talhoes, data = dados,  locations = ~ x + y,  variogram.model = "RMmatern",
+                   param = c(variance= max(ku.sv$gamma)- min(ku.sv$gamma), nugget= min(ku.sv$gamma), scale= max_dist/2, nu= parametro$v[i]), 
+                   psi.func = c("huber"),
+                   control = control.georob(error.family.estimation = "long.tailed",
+                                            error.family.cov.effects = "long.tailed"),
+                   # aniso = default.aniso(f1 = 0.5, omega = 22.5),
+                   # fit.aniso = default.fit.aniso(f1 = T, omega = TRUE),
+                   #nlminb = control.nlminb(start= 0.00001, lower = c(0,0,0,0.5), upper=c(170,70,907,6.5)),
+                   #nlminb= control.nlminb(lower=list(variance= 0, nugget= 0, scale=0,nu= parametro$v[i]), 
+                   #upper=list(variance= var(dados$P), nugget= var(dados$P), scale= d, nu= parametro$v[i])),
+                    fit.param = default.fit.param(variance=T, nugget = T, scale=T, nu=F))
+models[[i]]= ku
+parametro$EM[i]= mean(ku$residuals)
+parametro$MAE[i]= mean(abs(ku$residuals))
+parametro$RMSE[i]= sqrt(mean((ku$residuals)^2))
+parametro$variance[i]= ku$variogram.object[[1]]$param[['variance']] 
+parametro$nugget[i]= ku$variogram.object[[1]]$param[['nugget']] 
+parametro$scale[i]= ku$variogram.object[[1]]$param[['scale']]
+}
+round(parametro,2)
+#names(models)= parametro$v
+#write.csv(parametro, "parametro_p_ku.csv")
+```
+
+
+```{r}
+#ku= georob::georob(K ~ CH_1 + elevacao + talhoes, data = dados,  locations = ~ x + y,variogram.model = "RMmatern", param=c(variance=5, nugget=2, scale= 200, nu=0.5), fit.param = default.fit.param(variance=T, nugget = T, scale=T, nu=F), psi.func = c("huber"), verbose=2)
+
+ku.sph= georob::georob(K ~ CH_1 + elevacao + talhoes, data = dados,  locations = ~ x + y,variogram.model = "RMspheric", param=c(variance= max(ku.sv$gamma)- min(ku.sv$gamma), nugget= min(ku.sv$gamma), scale= max_dist/2), fit.param = default.fit.param(variance=T, nugget = T, scale=T), psi.func = c("huber"),control = control.georob(error.family.estimation = "long.tailed", error.family.cov.effects = "long.tailed"))
+
+# ku.exp= georob::georob(K ~ CH_1 + elevacao + talhoes, data = dados,  locations = ~ x + y,variogram.model = "RMexp", param=c(variance=5, nugget=2,scale=300), fit.param = default.fit.param(variance=T, nugget = T, scale=T), psi.func = c("huber"))
 ```
 
 ```{r}
-ku= georob::georob(K ~ CH_1 + elevacao + talhoes, data = dados,  locations = ~ x + y,variogram.model = "RMmatern", param=c(variance=5, nugget=2, scale= 200, nu=0.5), fit.param = default.fit.param(variance=T, nugget = T, scale=T, nu=F), psi.func = c("huber"), verbose=2)
-
-ku.sph= georob::georob(K ~ CH_1 + elevacao + talhoes, data = dados,  locations = ~ x + y,variogram.model = "RMspheric", param=c(variance=5, nugget=2, scale= 300), fit.param = default.fit.param(variance=T, nugget = T, scale=T), psi.func = c("huber"))
-
-ku.exp= georob::georob(K ~ CH_1 + elevacao + talhoes, data = dados,  locations = ~ x + y,variogram.model = "RMexp", param=c(variance=5, nugget=2,scale=300), fit.param = default.fit.param(variance=T, nugget = T, scale=T), psi.func = c("huber"))
+summary(models[[5]])
 ```
-
 ```{r}
-summary(ku)
+plot(models[[5]],lag.dist.def=seq(0,max_dist/2, by= min_dist*1.4))
 ```
 
 ```{r}
@@ -206,34 +262,51 @@ summary(ku.sph)
 ```
 
 ```{r}
-summary(ku.exp)
-```
-
-```{r}
-prfl.ku.sph <- profilelogLik(ku.sph ,values=data.frame(scale=seq(100, 800, by=25)))
-plot(loglik~scale, prfl.ku.sph, type="l", main="ku.sph")
+dados$residuo.ku= models[[2]]$residuals
+plot(gstat::variogram(residuo.ku ~1, data=dados, cutoff= 800, width=80, map=T), main=" residuals (K- Area 2)")
 ```
 
 Cross-validation (LOOCV)
+lgn=T
 ```{r}
-cv.ku = georob::cv(ku, seed= 42, nset = 95, ncores=6, lgn=T)
-cv.ku.exp =georob::cv(ku.exp, seed= 42, nset =95, ncores=6, lgn=T)
-cv.ku.sph =georob::cv(ku.sph, seed= 42, nset =95, ncores=6, lgn=T)
+cv.ku = georob::cv(models[[5]], seed= 42, nset = 89, ncores=6)
+#cv.ku1 =georob::cv(models[[6]], seed= 42, nset =89, ncores=6)
+#cv.ku3 =georob::cv(models[[2]], seed= 42, nset =89, ncores=6)
+cv.ku.sph =georob::cv(ku.sph, seed= 42, nset =89, ncores=6)
 ```
 
 
 ```{r}
-cv.ku.sph
+cv.ku;cv.ku.sph
 ```
 
-```{r}
-plot(cv.ku, main="Matern")
-plot(cv.ku.exp, main="Exponential")
-plot(cv.ku.sph, main="Spheric")
+# ```{r}
+# plot(cv.ku, main="Matern")
+# plot(cv.ku.exp, main="Exponential")
+# plot(cv.ku.sph, main="Spheric")
+# ```
+
+
+```{r,fig.align='center', fig.cap="Fig 7. Perfil da função logarítimica da verossimilhança restrita para o parâmetro alcance do modelo ajustado em função das covariáveis" }
+scala= ku.sph$variogram.object[[1]]$param[4]
+prfl.ku <- profilelogLik(ku.sph,values=data.frame(scale=seq(scala/2, max_dist/2, length.out = 30)))
+
+#par(mfrow=c(1,3),mar=c(3, 2.5, 3, 1))
+plot(loglik~scale, prfl.ku, type="l") #, main="RUK-6.5"
+abline(v=ku.sph$variogram.object[[1]]$param[4])
+
+plot(variance~scale, prfl.ku, ylim=c(0, max(variance)), type="l", main="K- Area2")
+abline(h=models[[5]]$variogram.object[[1]]$param[1], lty=2)
+
+plot(nugget~scale, prfl.ku, ylim=c(0, max(nugget)), type="l")
+abline(h=models[[5]]$variogram.object[[1]]$param[3], lty=2)
 ```
 
+
+
 ```{r}
-plot(ku.sph, lag.dist.def=seq(0,1000, by=100), max.lag=1100, estimator="qn", xlab ="Distance", ylab = "Semivariance", main="ku", type="p",annotate=T)
+plot(models[[5]], lag.dist.def=seq(0,1000, by=100), max.lag=1100, estimator="ch", xlab ="Distance", ylab = "Semivariance", main="ku", type="p",annotate=T)
+plot(ku.sph, lag.dist.def=seq(0,1000, by=100), max.lag=1100, estimator="qn", xlab ="Distance", ylab = "Semivariance", main="ku", type="p",add=T, col="red")
 #lines(ku.sph, col="red")
 #lines(ku.exp, col="blue")
 ```
@@ -241,37 +314,72 @@ plot(ku.sph, lag.dist.def=seq(0,1000, by=100), max.lag=1100, estimator="qn", xla
 ### Adjustment of the multivariate model according to coordinates  
 ```{r}
 reg.xy= lm(K ~ coordx + coordy, dados)
-plot(ku.sv <-sample.variogram(residuals(reg.xy),locations = dados@coords, lag.dist.def= seq(0,600, by=60), estimador="qn"), type="p", annotate=T)
+plot(ku.xy.sv <-sample.variogram(residuals(reg.xy),locations = dados@coords, lag.dist.def= seq(0,600, by=60), estimador="qn"), type="p", annotate=T)
+```
+Em busca do melhor parâmetro de suavidade
+```{r}
+parametro.xy =data.frame(v = c(seq(0.2, 1, by=0.1),seq(1.5,4, by=0.5),6,8),
+                      EM= NA,
+                      MAE= NA,
+                      RMSE = NA,
+                      variance = NA,
+                      nugget = NA,
+                      scale=NA)
+models.xy= list()
+
+for(i in 1:nrow(parametro.xy)){
+ku.xy= georob::georob(K ~ coordx +coordy, data = dados,  locations = ~ x + y,  variogram.model = "RMmatern",
+                   param = c(variance= max(ku.xy.sv$gamma)- min(ku.xy.sv$gamma), nugget= min(ku.xy.sv$gamma), scale= max_dist/3, nu= parametro.xy$v[i]), 
+                   psi.func = c("huber"),
+                   control = control.georob(error.family.estimation = "long.tailed",
+                                            error.family.cov.effects = "long.tailed"),
+                   # aniso = default.aniso(f1 = 0.7, omega = 95.),
+                   # fit.aniso = default.fit.aniso(f1 = F, omega = TRUE),
+                   #nlminb = control.nlminb(start= 0.00001, lower = c(0,0,0,0.5), upper=c(170,70,907,6.5)),
+                   #nlminb= control.nlminb(lower=list(variance= 0, nugget= 0, scale=0,nu= parametro$v[i]), 
+                   #upper=list(variance= var(dados$P), nugget= var(dados$P), scale= d, nu= parametro$v[i])),
+                    fit.param = default.fit.param(variance=T, nugget = T, scale=T, nu=F))
+models.xy[[i]]= ku.xy
+parametro.xy$EM[i]= mean(ku.xy$residuals)
+parametro.xy$MAE[i]= mean(abs(ku.xy$residuals))
+parametro.xy$RMSE[i]= sqrt(mean((ku.xy$residuals)^2))
+parametro.xy$variance[i]= ku.xy$variogram.object[[1]]$param[['variance']] 
+parametro.xy$nugget[i]= ku.xy$variogram.object[[1]]$param[['nugget']] 
+parametro.xy$scale[i]= ku.xy$variogram.object[[1]]$param[['scale']]
+}
+round(parametro.xy,2)
+```
+```{r}
+plot(models.xy[[6]],lag.dist.def=seq(0,max_dist/2, by= min_dist*1.4), estimator="ch")
+#plot(ku.sph,lag.dist.def=seq(0,max_dist/2, by= min_dist*1.4), ylim=c(0,150), estimator="ch", add=T) 
 ```
 
-
 ```{r}
-ku.xy = georob::georob(K ~ coordx + coordy, data = dados,  locations = ~ x + y, variogram.model = "RMmatern", param=c(variance=6, nugget=1, scale= 300, nu=0.5), fit.param = default.fit.param(variance=T, nugget = T, scale=T, nu=F), psi.func = c("huber"), verbose=1)
-
-ku.xy.sph = georob::georob(K ~ coordx + coordy, data = dados,  locations = ~ x + y, variogram.model = "RMspheric", param=c(variance=6, nugget=2, scale= 300), fit.param = default.fit.param(variance=T, nugget = T, scale=T),psi.func = c("huber"), verbose=1)
-
-ku.xy.exp = georob::georob(K ~ coordx + coordy, data = dados,  locations = ~ x + y, variogram.model = "RMexp", param=c(variance=6, nugget=2, scale= 300), fit.param = default.fit.param(variance=T, nugget = T, scale=T),psi.func = c("huber"), verbose=1)
+# ku.xy = georob::georob(K ~ coordx + coordy, data = dados,  locations = ~ x + y, variogram.model = "RMmatern", param=c(variance=6, nugget=1, scale= 300, nu=0.5), fit.param = default.fit.param(variance=T, nugget = T, scale=T, nu=F), psi.func = c("huber"), verbose=1)
+# 
+ku.xy.sph = georob::georob(K ~ coordx + coordy, data = dados,  locations = ~ x + y, variogram.model = "RMspheric", param=c(variance= max(ku.xy.sv$gamma)- min(ku.xy.sv$gamma), nugget= min(ku.xy.sv$gamma), scale= max_dist/3), fit.param = default.fit.param(variance=T, nugget = T, scale=T),psi.func = c("huber"),control = control.georob(error.family.estimation = "long.tailed",
+                                            error.family.cov.effects = "long.tailed"))
+# 
+# ku.xy.exp = georob::georob(K ~ coordx + coordy, data = dados,  locations = ~ x + y, variogram.model = "RMexp", param=c(variance=6, nugget=2, scale= 300), fit.param = default.fit.param(variance=T, nugget = T, scale=T),psi.func = c("huber"), verbose=1)
 ```
 
 ```{r}
-summary(ku.xy)
+summary(models.xy[[6]])
 ```
 ```{r}
 summary(ku.xy.sph)
 ```
-```{r}
-summary(ku.xy.exp)
-```
+
 
 Cross-validation  (LOOCV)
 ```{r}
-cv.xy = georob::cv(ku.xy, seed= 42, nset =95, ncores=6)
-cv.xy.sph = georob::cv(ku.xy.sph, seed= 42, nset =95, ncores=6)
-cv.xy.exp = georob::cv(ku.xy.exp, seed= 42, nset =95, ncores=6)
+cv.xy = georob::cv(models.xy[[6]], seed= 42, nset =89, ncores=6,control=control.georob(initial.param=FALSE))
+cv.xy.sph = georob::cv(ku.xy.sph, seed= 42, nset =89, ncores=6)
+#cv.xy.exp = georob::cv(ku.xy.exp, seed= 42, nset =95, ncores=6)
 ```
 
 ```{r}
-cv.xy.sph
+cv.xy;cv.xy.sph
 ```
 
 
@@ -279,11 +387,22 @@ cv.xy.sph
 # plot(cv.xy.sph, main="Spheric")
 ```
 
-```{r}
-print(plot(ku.xy.sph, lag.dist.def= seq(0,800, by=100), max.lag=2000, estimator="qn", xlab ="Distance", ylab = "Semivariance", type="p",annotate=T, main="ku ~xy", ylim=c(0,20)))
-#lines(ku.xy.exp, col="red")
-#lines(ku.xy.sph, col="blue")
+
+```{r,fig.align='center', fig.cap="Fig 7. Perfil da função logarítimica da verossimilhança restrita para o parâmetro alcance do modelo ajustado em função das covariáveis" }
+scala= ku.xy.sph$variogram.object[[1]]$param[4]
+prfl.ku.xy <- profilelogLik(ku.xy.sph,values=data.frame(scale=seq(scala/2, max_dist/2, length.out = 30)))
+
+#par(mfrow=c(1,3),mar=c(3, 2.5, 3, 1))
+plot(loglik~scale, prfl.ku.xy, type="l") #, main="RUK-6.5"
+abline(v=ku.xy.sph$variogram.object[[1]]$param[4])
+
+plot(variance~scale, prfl.ku.xy, ylim=c(0, max(variance)), type="l", main="K- Area2")
+abline(h=ku.xy.sph$variogram.object[[1]]$param[1], lty=2)
+
+plot(nugget~scale, prfl.ku.xy, ylim=c(0, max(nugget)), type="l")
+abline(h=ku.xy.sph$variogram.object[[1]]$param[3], lty=2)
 ```
+
 
 ### Univariate model adjustment 
 
@@ -292,16 +411,53 @@ reg.kri= lm(K ~1, dados)
 plot(kri.sv <-sample.variogram(residuals(reg.kri),locations = dados@coords, lag.dist.def= seq(0,600, by=100), estimador="qn"), type="p", annotate=T)
 ```
 
+Em busca do melhor parâmetro de suavidade
 ```{r}
-kri=  georob::georob(K ~ 1, data = dados,  locations = ~ x + y,variogram.model = "RMmatern",param=c(variance=6, nugget=2, scale= 350, nu= 0.5), fit.param = default.fit.param(variance=T, nugget = T, scale=T, nu=F),psi.func = c("huber"))
+parametro.kri =data.frame(v = c(seq(0.2, 1, by=0.1),seq(1.5,4, by=0.5),6,8),
+                      EM= NA,
+                      MAE= NA,
+                      RMSE = NA,
+                      variance = NA,
+                      nugget = NA,
+                      scale=NA)
+models.kri= list()
 
-kri.sph=  georob::georob(K ~ 1, data = dados,  locations = ~ x + y,variogram.model = "RMsph",param=c(variance=6, nugget=2, scale= 350), fit.param = default.fit.param(variance=T, nugget = T, scale=T),psi.func = c("huber"))
-
-kri.exp=  georob::georob(K ~ 1, data = dados,  locations = ~ x + y,variogram.model = "RMexp",param=c(variance=6, nugget=2, scale= 350), fit.param = default.fit.param(variance=T, nugget = T, scale=T),psi.func = c("huber"))
+for(i in 1:nrow(parametro.kri)){
+kri= georob::georob(K ~ 1, data = dados,  locations = ~ x + y,  variogram.model = "RMmatern",
+                   param = c(variance= max(kri.sv$gamma)- min(ku.sv$gamma), nugget= min(kri.sv$gamma), scale= max_dist/3, nu= parametro.kri$v[i]), 
+                   psi.func = c("huber"),
+                   control = control.georob(error.family.estimation = "long.tailed",
+                                            error.family.cov.effects = "long.tailed"),
+                   # aniso = default.aniso(f1 = 0.7, omega = 95.),
+                   # fit.aniso = default.fit.aniso(f1 = F, omega = TRUE),
+                   #nlminb = control.nlminb(start= 0.00001, lower = c(0,0,0,0.5), upper=c(170,70,907,6.5)),
+                   #nlminb= control.nlminb(lower=list(variance= 0, nugget= 0, scale=0,nu= parametro$v[i]), 
+                   #upper=list(variance= var(dados$P), nugget= var(dados$P), scale= d, nu= parametro$v[i])),
+                    fit.param = default.fit.param(variance=T, nugget = T, scale=T, nu=F))
+models.kri[[i]]= kri
+parametro.kri$EM[i]= mean(kri$residuals)
+parametro.kri$MAE[i]= mean(abs(kri$residuals))
+parametro.kri$RMSE[i]= sqrt(mean((kri$residuals)^2))
+parametro.kri$variance[i]= kri$variogram.object[[1]]$param[['variance']] 
+parametro.kri$nugget[i]= kri$variogram.object[[1]]$param[['nugget']] 
+parametro.kri$scale[i]= kri$variogram.object[[1]]$param[['scale']]
+}
+round(parametro.kri,2)
+#names(models)= parametro$v
+#write.csv(parametro, "parametro_p_ku.csv")
 ```
 
 ```{r}
-summary(kri)
+# kri=  georob::georob(K ~ 1, data = dados,  locations = ~ x + y,variogram.model = "RMmatern",param=c(variance=6, nugget=2, scale= 350, nu= 0.5), fit.param = default.fit.param(variance=T, nugget = T, scale=T, nu=F),psi.func = c("huber"))
+# 
+kri.sph=  georob::georob(K ~ 1, data = dados,  locations = ~ x + y,variogram.model = "RMsph",param=c(variance=6, nugget=2, scale= 350), fit.param = default.fit.param(variance=T, nugget = T, scale=T),psi.func = c("huber"),control = control.georob(error.family.estimation = "long.tailed",
+                                            error.family.cov.effects = "long.tailed"))
+# 
+# kri.exp=  georob::georob(K ~ 1, data = dados,  locations = ~ x + y,variogram.model = "RMexp",param=c(variance=6, nugget=2, scale= 350), fit.param = default.fit.param(variance=T, nugget = T, scale=T),psi.func = c("huber"))
+```
+
+```{r}
+summary(models.kri[[7]])
 ```
 
 ```{r}
@@ -309,23 +465,41 @@ summary(kri.sph)
 ```
 
 ```{r}
-summary(kri.exp)
+plot(models.kri[[7]],lag.dist.def=seq(0,max_dist/2, by= min_dist*1.4), estimator="ch", ylim=c(0,10))
+plot(kri.sph,lag.dist.def=seq(0,max_dist/2, by= min_dist*1.4), estimator="ch", add=T) 
 ```
-
 
 cross validation (LOOCV)
 ```{r, warning=T , error=T}
-cv.kri = georob::cv(kri, seed= 42, nset =95, ncores=6,control=control.georob(initial.param=FALSE))
-cv.kri.sph = georob::cv(kri.sph, seed= 42, nset =95, ncores=6)
-cv.kri.exp = georob::cv(kri.exp, seed= 42, nset =95, ncores=6,control=control.georob(initial.param=FALSE))
+cv.kri = georob::cv(models.kri[[7]], seed= 42, nset =89, ncores=6,control=control.georob(initial.param=FALSE))
+#cv.kri1 = georob::cv(models.kri[[6]], seed= 42, nset =89, ncores=6,control=control.georob(initial.param=FALSE))
+cv.kri.sph = georob::cv(kri.sph, seed= 42, nset =89, ncores=6)
+#cv.kri.exp = georob::cv(kri.exp, seed= 42, nset =95, ncores=6,control=control.georob(initial.param=FALSE))
 ```
 
 ```{r}
-cv.kri.sph
+cv.kri;cv.kri.sph
 ```
 
+
+```{r,fig.align='center', fig.cap="Fig 7. Perfil da função logarítimica da verossimilhança restrita para o parâmetro alcance do modelo ajustado em função das covariáveis" }
+scala= kri.sph$variogram.object[[1]]$param[4]
+prfl.kri <- profilelogLik(kri.sph,values=data.frame(scale=seq(scala/2, max_dist/2, length.out = 30)))
+
+#par(mfrow=c(1,3),mar=c(3, 2.5, 3, 1))
+plot(loglik~scale, prfl.kri, type="l") #, main="RUK-6.5"
+abline(v=kri.sph$variogram.object[[1]]$param[4])
+
+plot(variance~scale, prfl.kri, ylim=c(0, max(variance)), type="l", main="K- Area2")
+abline(h=models.kri[[1]]$variogram.object[[1]]$param[1], lty=2)
+
+plot(nugget~scale, prfl.kri, ylim=c(0, max(nugget)), type="l")
+abline(h=models.kri[[1]]$variogram.object[[1]]$param[3], lty=2)
+```
+
+
 ```{r}
-print(plot(kri, lag.dist.def=seq(0,600, by=100), max.lag=1100, estimator="qn", xlab ="Distance", ylab = "Semivariance", type="p",annotate=T, main="kriging"))
+print(plot(kri.sph, lag.dist.def=seq(0,600, by=100), max.lag=1100, estimator="ch", xlab ="Distance", ylab = "Semivariance", type="p",annotate=T, main="kriging"))
 #lines(kri.sph, col="red")
 #lines(kri.exp, col = "blue")
 ```
@@ -336,15 +510,15 @@ print(plot(kri, lag.dist.def=seq(0,600, by=100), max.lag=1100, estimator="qn", x
 
 Visualization of semivariogram all models
 ```{r}
-print(plot(kri.sph, lag.dist.def=seq(0,600, by=100),  estimator="qn", xlab ="Distance", ylab = "Semivariance", type="p", ylim=c(0,15), cex.lab=1.5, cex.axis=1.5), title="CTC");grid()
-print(plot(ku.xy.sph, lag.dist.def=seq(0,600, by=100),  estimator="qn", xlab ="Distance", ylab = "Semivariance", type="p", ylim=c(0,15),add=T, col="blue", cex.lab=1.5, cex.axis=1.5))
-print(plot(ku.sph, lag.dist.def=seq(0,600, by=100),  estimator="qn", xlab ="Distance", ylab = "Semivariance", type="p", ylim=c(0,15),add=T, col="red", cex.lab=1.5, cex.axis=1.5))
+print(plot(kri.sph, lag.dist.def=seq(0,600, by=100),  estimator="ch", xlab ="Distance", ylab = "Semivariance", type="p", cex.lab=1.5, cex.axis=1), title="CTC");grid()
+print(plot(ku.xy.sph, lag.dist.def=seq(0,600, by=100),  estimator="ch", xlab ="Distance", ylab = "Semivariance", type="p",add=T, col="blue", cex.lab=1.5, cex.axis=1))
+print(plot(ku.sph, lag.dist.def=seq(0,600, by=100),  estimator="ch", xlab ="Distance", ylab = "Semivariance", type="p",add=T, col="red", cex.lab=1.5, cex.axis=1))
 title("K (mmolc dm-3) - Area 2")
 ```
 
 Cross-validation (LOOCV) deterministic model IDW
 ```{r}
-cv.idw=gstat::krige.cv(K ~ 1, dados, nfold = 96)# validação cruzada
+cv.idw=gstat::krige.cv(K ~ 1, dados, nfold = 90)# validação cruzada
 cv.idw=as.data.frame(cv.idw)# transforma para data.frame
 statistics.idw <- c(
         me = mean(cv.idw$observed - cv.idw$var1.pred ),
@@ -368,7 +542,11 @@ Cross-validation  (LOOCV) for the regression model according to auxiliary variab
 * The average of the metrics of each fold was performed
 
 ```{r}
-dat = dplyr::select(as.data.frame(dados),-b3,-b4,-b5, -catch_area, -sw1, -sw2, - CH_0.5m, - coordx, -coordy)
+install.packages("dplyr", dependencies = T)
+library(dplyr)
+names(dados)
+dat = dplyr::select(as.data.frame(dados),-b3,-b4,-b5, -catch_area, -sw1, -sw2, - CH_0.5m, - coordx, -coordy, residuo.aic, residuo.ku)
+dat= as.data.frame(dados)
 ```
 
 
@@ -474,27 +652,37 @@ statistics.idw;me;statistics.predict
 Extracting auxiliary information values for the entire interpolation grid node
 ```{r}
 # rasterizo o contorno para  a resolução do mapa interpolado
-boundary <-raster::shapefile("../Data/Boundary/22S.shp")
-r =raster::raster(boundary, res = 10) # rerolu??o do pixel 
-rp =raster::rasterize(boundary, r, 0) # cria um objeto no formato raster
-grid = as(rp, "SpatialPixelsDataFrame") # transforma em pontos onde ser?o realizadas as interpola??es
-pontos_grid= raster::extract(variaveis_auxiliares, grid)
-# Combino os extraidos
-grid_interpolacao = cbind(grid,pontos_grid)
-grid_interpolacao = na.omit(grid_interpolacao)
+# boundary <-raster::shapefile("../Data/Boundary/22S.shp")
+# r =raster::raster(boundary, res = 10) # rerolu??o do pixel 
+# rp =raster::rasterize(boundary, r, 0) # cria um objeto no formato raster
+# grid = as(rp, "SpatialPixelsDataFrame") # transforma em pontos onde ser?o realizadas as interpola??es
+# pontos_grid= raster::extract(variaveis_auxiliares, grid)
+# # Combino os extraidos
+# grid_interpolacao = cbind(grid,pontos_grid)
+# grid_interpolacao = na.omit(grid_interpolacao)
+
+grid = read.csv("../Data/grid/grid_ipiranga.csv")
+str(grid)
+grid= dplyr::select(grid, -X)
+coordinates(grid)= ~x+y
+grid= as(grid, "SpatialPixelsDataFrame")
+grid$talhoes= as.factor(grid$talhoes)
+grid$coordx= grid$x - min(grid$x)
+grid$coordy = grid$y - min(grid$y)
+str(grid)
 ```
 
-Creation of the prediction grid
-```{r}
-grid_interpolacao$coordx= grid_interpolacao$x- min(grid_interpolacao$x)
-grid_interpolacao$coordy= grid_interpolacao$y- min(grid_interpolacao$y)
-grid_interpolacao$talhoes = as.factor(grid_interpolacao$talhoes)
-```
+<!-- Creation of the prediction grid -->
+<!-- ```{r} -->
+<!-- grid_interpolacao$coordx= grid_interpolacao$x- min(grid_interpolacao$x) -->
+<!-- grid_interpolacao$coordy= grid_interpolacao$y- min(grid_interpolacao$y) -->
+<!-- grid_interpolacao$talhoes = as.factor(grid_interpolacao$talhoes) -->
+<!-- ``` -->
 
 prediction by KU according to auxiliary variables and visualization of the prediction map 
 
 ```{r}
-map.ku.cov <- predict(ku.sph, newdata= grid_interpolacao, control=control.predict.georob(extended.output=TRUE))
+map.ku.cov <- predict(ku.sph, newdata= grid, control=control.predict.georob(extended.output=TRUE))
 sp::gridded(map.ku.cov)= TRUE
 sp::spplot(map.ku.cov, c("pred"), main="Robust Universal Kriging prediction", scales=list(draw=TRUE))
 summary(ku.sph)
@@ -503,7 +691,7 @@ summary(ku.sph)
 prediction by KU according to the coordinates and visualization of the prediction map
 
 ```{r }
-map.ku.xy <- predict(ku.xy.sph, newdata= grid_interpolacao, control=control.predict.georob(extended.output=TRUE))
+map.ku.xy <- predict(ku.xy.sph, newdata= grid, control=control.predict.georob(extended.output=TRUE))
 sp::gridded(map.ku.xy)= TRUE
 sp::spplot(map.ku.xy, c("pred"), main="Robust Universal Kriging prediction", scales=list(draw=TRUE)) 
 summary(kri.sph)
@@ -512,7 +700,7 @@ summary(kri.sph)
 Prediction by OK and visualization of the prediction map
 
 ```{r}
-map.kri <- predict(kri.sph, newdata= grid_interpolacao, control=control.predict.georob(extended.output=TRUE))
+map.kri <- predict(kri.sph, newdata= grid, control=control.predict.georob(extended.output=TRUE))
 sp::gridded(map.kri)= TRUE
 sp::spplot(map.kri, c("pred"), main="Robust Ordinary Kriging prediction", scales=list(draw=TRUE))
 ```
@@ -520,24 +708,27 @@ sp::spplot(map.kri, c("pred"), main="Robust Ordinary Kriging prediction", scales
 
 Deterministic model prediction and prediction map visualization
 ```{r}
-proj4string(dados)= CRS(proj4string(grid_interpolacao))
-map.idw= gstat::idw(K ~1, dados, grid_interpolacao)
+proj4string(dados)= CRS(proj4string(grid))
+map.idw= gstat::idw(K ~1, dados, grid)
 sp::spplot(map.idw, c("var1.pred"),main="IDW prediction", scales=list(draw=TRUE))
 ```
 
 
 Prediction of the regression model and prediction map visualization
 ```{r}
-grid.reg = as.data.frame(grid_interpolacao)
+grid.reg = as.data.frame(grid)
 #grid.reg= na.omit(grid.reg)
 map.reg =  predict(model, newdata= grid.reg, type = c("response"), se.fit=T)
 map.reg = as.data.frame(map.reg)
 map.reg$x = grid.reg$x
 map.reg$y = grid.reg$y
-map.reg=dplyr::select(map.reg, x, y,fit, se.fit)
+names(map.reg)
+map.reg= map.reg[,c(5,6,1,2)]#x, y,fit, se.fit
+#map.reg=dplyr::select(map.reg, x, y,fit, se.fit)
 map.reg=rasterFromXYZ(map.reg)
 sp::spplot(map.reg, c("fit"))
 sp::spplot(map.reg, c("se.fit"))
+#install.packages("dplyr", force=T)
 ```
 
 
@@ -556,17 +747,19 @@ df= cbind(IDW, RMLR, ROK, RUK_coord, RUK_covars, OBS)
 df = as.data.frame(df)
 df1=reshape::melt(df, variable.series = "Metodos")
 df1 = dplyr::rename(df1, Methods= variable)
+names(df1)
+names(df1)= c("Methods", "value")
 #write.csv(df1, "../dados/df1.k_ipiranga.csv")
 ```
 
 Compare the similarity between two distributions by means of the kolmorogov-smirnov test
 ```{r}
 # Kolmorogv-smirnov
-obs.kri= ks.test(OBS, KRI)
-obs.ku= ks.test(OBS, KU)
-obs.ku_xy= ks.test(OBS, KU_XY)
+obs.kri= ks.test(OBS, ROK)
+obs.ku= ks.test(OBS, RUK_covars)
+obs.ku_xy= ks.test(OBS, RUK_coord)
 obs.idw= ks.test(OBS, IDW)
-obs.reg= ks.test(OBS, REG)
+obs.reg= ks.test(OBS, RMLR)
 ```
 
 Density of predicted values in cross-validation
@@ -576,32 +769,162 @@ ggplot(df1, aes(x= value, y= Methods, fill= Methods) )+
   ggridges::geom_density_ridges(scale=3, alpha=1, show.legend = F)+
   labs(title = "K (mmolc dm-3) - Area 2") +
   scale_fill_manual(values=c("#440154FF", "#414487FF", "#2A788EFF", "#22A884FF", "#7AD151FF", "#FDE725FF"))+
-  theme_bw(base_size=20)+
+  theme_bw(base_size=15)+
    theme(plot.title = element_text(hjust = 0.5))
+library(ggplot2)
 ```
 
-
-Saving the workspace
-```{r, eval=FALSE, include=FALSE}
-save.image("RData/analise.K.ipiranga.RData")
-```
 
 ```{r}
-# par(mfcol=c(2,2))
-# boxplot(dados$K,horizontal=TRUE, outline=TRUE)
-# hist(dados$K, col="gray", xlab="K", main= "")
-# par(mfcol=c(2,2))
-# boxplot(ku.sph$residuals,horizontal=TRUE, outline=TRUE)
-# hist(ku.sph$residuals, col="gray", xlab="Residuals RUK ~COV", main= "")
-# par(mfcol=c(2,2))
-# boxplot(ku.xy.sph$residuals,horizontal=TRUE, outline=TRUE)
-# hist(ku.xy.sph$residuals, col="gray", xlab="Residuals RUK ~XY", main= "")
-# par(mfcol=c(2,2))
-# boxplot(kri.sph$residuals,horizontal=TRUE, outline=TRUE)
-# hist(kri.sph$residuals, col="gray", xlab="Residuals ROK", main= "")
-# par(mfcol=c(2,2))
-# boxplot(cv.fit$residuals,horizontal=TRUE, outline=TRUE)
-# hist(cv.fit$residuals, col="gray", xlab="Residuals RMLR", main= "")
+par(mfcol=c(2,2))
+boxplot(dados$K,horizontal=TRUE, outline=TRUE)
+hist(dados$K, col="gray", xlab="K", main= "")
+par(mfcol=c(2,2))
+boxplot(kri.sph$residuals,horizontal=TRUE, outline=TRUE)
+hist(kri.sph$residuals, col="gray", xlab="Residuals ROK", main= "")
+par(mfcol=c(2,2))
+boxplot(ku.xy.sph$residuals,horizontal=TRUE, outline=TRUE)
+hist(ku.xy.sph$residuals, col="gray", xlab="Residuals RUK_coord", main= "")
+par(mfcol=c(2,2))
+boxplot(cv.fit$residuals,horizontal=TRUE, outline=TRUE)
+hist(cv.fit$residuals, col="gray", xlab="Residuals RMLR", main= "")
+par(mfcol=c(2,2))
+boxplot(ku.sph$residuals,horizontal=TRUE, outline=TRUE)
+hist(ku.sph$residuals, col="gray", xlab="Residuals RUK_covars", main= "")
+
 ```
 
 The maps was save and ploted on QGis
+
+The maps was save and ploted on QGis
+
+```{r}
+mapaRaster = stack(map.reg)
+proj4string(mapaRaster) = proj4string(poly)
+writeRaster(mapaRaster,
+            filename = paste0("../../Area2/Data/mapas/k/rmlr/",names(mapaRaster)),
+            format= "GTiff",
+            bylayer=T,
+            overwrite=T)
+```
+
+```{r eval=FALSE, include=FALSE}
+mapaRaster = raster(map.idw)
+proj4string(mapaRaster) = proj4string(poly)
+writeRaster(mapaRaster,
+            filename = paste0("../Data/mapas/k/idw/",names(mapaRaster)),
+            format= "GTiff",
+            bylayer=T,
+            overwrite=F)
+```
+
+Salvar os mapas gerados
+```{r eval=FALSE, include=FALSE}
+mapaRaster = stack(map.kri)
+proj4string(mapaRaster) = proj4string(poly)
+writeRaster(mapaRaster,
+            filename = paste0("../Data/mapas/k/rok/",names(mapaRaster)),
+            format= "GTiff",
+            bylayer=T,
+            overwrite=T)
+```
+
+Salvar os mapas
+```{r eval=FALSE, include=FALSE}
+mapaRaster = stack(map.ku.xy)
+proj4string(mapaRaster) = proj4string(poly)
+writeRaster(mapaRaster,
+            filename = paste0("../Data/mapas/k/rukcoord/",names(mapaRaster)),
+            format= "GTiff",
+            bylayer=T,
+            overwrite=T)
+```
+
+Salvar os mapas
+```{r eval=FALSE, include=FALSE}
+mapaRaster = stack(map.ku.cov)
+proj4string(mapaRaster) = proj4string(poly)
+writeRaster(mapaRaster,
+            filename = paste0("../Data/mapas/k/rukcovars/",names(mapaRaster)),
+            format= "GTiff",
+            bylayer=T,
+            overwrite=T)
+```
+
+```{r}
+par(mfrow=c(2,3))
+plot(loglik~scale, prfl.kri, type="l", main="ROK P-Area2") #, main="RUK-6.5"
+abline(v=models.kri[[11]]$variogram.object[[1]]$param[4], lty=2)
+
+plot(variance~scale, prfl.kri, ylim=c(0, max(variance)), type="l", main="ROK P- Area2")
+abline(h=models.kri[[11]]$variogram.object[[1]]$param[1], lty=2)
+
+plot(nugget~scale, prfl.kri, ylim=c(0, max(nugget)), type="l")
+abline(h=models.kri[[11]]$variogram.object[[1]]$param[3], lty=2)
+
+
+plot(loglik~scale, prfl.ku.xy, type="l", main="RUKcoord P-Area2") #, main="RUK-6.5"
+abline(v=ku.xy.sph$variogram.object[[1]]$param[4], lty=2)
+
+plot(variance~scale, prfl.ku.xy, ylim=c(0, max(variance)), type="l", main="RUKcoord P- Area2")
+abline(h=ku.xy.sph$variogram.object[[1]]$param[1], lty=2)
+
+plot(nugget~scale, prfl.ku.xy, ylim=c(0, max(nugget)), type="l")
+abline(h=ku.xy.sph$variogram.object[[1]]$param[3], lty=2)
+```
+
+```{r}
+save.image("potassio.RData")
+```
+
+
+```{r}
+model1= lm(K ~ 1, data=dat)
+
+#data <- model.frame(model)
+idx1  <- seq(1, nrow(dat), 1)
+#data <- cbind(data, idx)
+obs1  <- numeric()
+pred1 <- numeric()
+pev1  <- numeric()
+   # sd.mean <- numeric()
+    # sigma   <- numeric()
+    # run cross-validation
+for (i in 1:nrow(dat)) {
+      cv.fit1     <- lm(formula(model1), subset = idx1[-i], data = dat)
+      cv.pred1    <- predict(cv.fit1, dat[i, ], se.fit = TRUE, interval =c("prediction"), type= c("response"))
+      obs1[i]     <- dat[i, 1]
+      pred1[i]    <- cv.pred1$fit
+  
+      # standard deviation of the predicted mean value of Y
+      # sd.mean[i] <- cv.pred$se.fit
+      # standard deviation of a predicted values of an individual observation
+      # also known as prediction error variance
+      pev1[i] <- (sqrt(1 + c(cv.pred1$se.fit/cv.pred1$residual.scale) ^ 2) *
+                   cv.pred1$residual.scale) ^ 2
+  
+}
+
+pev2= (cv.pred1$se.fit^2) + (cv.pred1$residual.scale^2)
+
+statistics.predict.mean <- c(
+        me = mean(obs1 - pred1),
+        medme = median(obs1 - pred1),
+        
+        mae = mean(abs(obs1 - pred1)),
+        
+        rmse = sqrt(mean((obs1 - pred1)^2)),
+        
+        nse2 =1-sum((obs1 - pred1)^2)/
+        sum((obs1 - mean(obs1))^2),
+
+        nse1 =1-(sum(abs(obs1 - pred1))/
+        sum(abs(obs1 - mean(obs1)))),
+        # Compara as diferenças do erro ao quadrado pela variação dos erros de predição    
+        msse =mean((obs1 - pred1)^2/pev1),
+        medsse =median((obs1 - pred1)^2/pev1))
+
+msdr2 =mean((obs1 - pred1)^2/pev2)
+statistics.predict.mean
+```
+

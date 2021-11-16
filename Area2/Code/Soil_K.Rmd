@@ -64,8 +64,6 @@ In parentheses are the numbers corresponding to the soil classes.
 ```{r}
 names(dados)
 ```
-
-
 ```{r}
 dados$SC[dados$SC=="1"]=10
 dados$SC[dados$SC=="2"]=10
@@ -88,7 +86,7 @@ np= plyr::count(dados$SC)
 
 ggplot(as.data.frame(dados), aes(SC, K)) +
    ylab("K (mmolc dm-3)")+
-  xlab("TPS")+
+  xlab("SC")+
   geom_boxplot(outlier.colour = "red") + 
   annotate("text",x=np$x, y=15, label = np$freq, colour= "red", size=4.5)+
 theme_bw(base_size = 15)
